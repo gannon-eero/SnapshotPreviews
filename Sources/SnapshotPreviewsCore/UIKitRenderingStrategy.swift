@@ -91,6 +91,17 @@ public class UIKitRenderingStrategy: RenderingStrategy {
     preview: SnapshotPreviewsCore.Preview,
     completion: @escaping (SnapshotResult) -> Void
   ) {
+    // OPT-IN (eero fork): when EMERGE_PREVIEW_WINDOW_CAPTURE is set, mount the preview full-screen in
+    // the real key window and capture the WHOLE window after presentation settles, instead of the
+    // shrink-wrapped isolated view. This makes a real `.sheet` / `.fullScreenCover` / detent (which
+    // present ASYNCHRONOUSLY into the window's presentation layer, above the previewed view) appear in
+    // the snapshot with NO author opt-in modifier. The default (unset) path is byte-identical to
+    // upstream, so XCTest snapshot tests — which also set EMERGE_IS_RUNNING_FOR_SNAPSHOTS but never
+    // this var — are unaffected. See eero `.mise/tasks/preview`, which sets it via SIMCTL_CHILD_.
+    if WindowCaptureRendering.isEnabled {
+      WindowCaptureRendering.render(preview: preview, window: window, completion: completion)
+      return
+    }
     UIView.setAnimationsEnabled(false)
     let view = preview.view()
     let controller = view.makeExpandingView(layout: preview.layout, window: window)
