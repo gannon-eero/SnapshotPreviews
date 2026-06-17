@@ -98,7 +98,12 @@ public class UIKitRenderingStrategy: RenderingStrategy {
     // the snapshot with NO author opt-in modifier. The default (unset) path is byte-identical to
     // upstream, so XCTest snapshot tests — which also set EMERGE_IS_RUNNING_FOR_SNAPSHOTS but never
     // this var — are unaffected. See eero `.mise/tasks/preview`, which sets it via SIMCTL_CHILD_.
-    if WindowCaptureRendering.isEnabled {
+    //
+    // Only for `.device` layout (full-screen — the default for screen previews). A preview that opts
+    // into `.sizeThatFits` / `.fixed` is a COMPONENT meant to be captured at its intrinsic/fixed size;
+    // window-capturing it would render it tiny inside a full device frame. Those fall through to the
+    // standard isolated-view path, so component previews stay byte-identical even with the env set.
+    if WindowCaptureRendering.isEnabled, case .device = preview.layout {
       WindowCaptureRendering.render(preview: preview, window: window, completion: completion)
       return
     }
