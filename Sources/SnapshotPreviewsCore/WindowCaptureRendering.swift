@@ -10,7 +10,7 @@ import UIKit
 import SwiftUI
 
 /// Renders a preview by mounting it FULL-SCREEN in the real key window and capturing the WHOLE window
-/// after presentation settles — so a real `.sheet` / `.fullScreenCover` / `.presentationDetents`
+/// once presentation has settled — so a real `.sheet` / `.fullScreenCover` / `.presentationDetents`
 /// (which present asynchronously into the window's presentation layer, ABOVE the previewed view)
 /// appears in the snapshot with no author opt-in modifier.
 ///
@@ -25,16 +25,23 @@ enum WindowCaptureRendering {
     ProcessInfo.processInfo.environment["EMERGE_PREVIEW_WINDOW_CAPTURE"] == "1"
   }
 
-  /// Seconds to wait for asynchronous presentation (sheet/cover) to mount before capturing.
-  /// Animations are disabled, so a presented sheet settles within a couple of runloop turns; the
-  /// default is generous to stay robust on a cold simulator. Override with EMERGE_PREVIEW_SETTLE_SECONDS.
-  private static var settleSeconds: Double {
-    if let raw = ProcessInfo.processInfo.environment["EMERGE_PREVIEW_SETTLE_SECONDS"],
-       let parsed = Double(raw), parsed >= 0 {
+  /// How long to wait for an asynchronous presentation (sheet/cover) to APPEAR before concluding the
+  /// preview has none and capturing immediately. We do NOT sleep this long for a sheet — once a
+  /// presentation is detected we capture on the next runloop turn (typically a few frames in). This
+  /// only bounds the no-presentation case (the common full-screen screen preview). Animations are
+  /// disabled, so SwiftUI commits `.sheet(isPresented: true)` within a couple of frames; the default
+  /// is comfortably above the observed latency. Override with EMERGE_PREVIEW_PRESENT_GRACE_MS.
+  private static var presentGraceMilliseconds: Int {
+    if let raw = ProcessInfo.processInfo.environment["EMERGE_PREVIEW_PRESENT_GRACE_MS"],
+       let parsed = Int(raw), parsed >= 0 {
       return parsed
     }
-    return 1.2
+    return 250
   }
+
+  /// Poll step. One step ≈ one display frame; animations are disabled so a sheet mounts within a
+  /// handful of these, and we capture on the first turn after it is laid out.
+  private static let pollStepMilliseconds = 16
 
   @MainActor
   static func render(
@@ -58,10 +65,35 @@ enum WindowCaptureRendering {
     host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     window.layoutIfNeeded()
 
-    // Let SwiftUI commit the `.sheet`/`.fullScreenCover` presentation (asynchronous), then capture.
-    DispatchQueue.main.asyncAfter(deadline: .now() + settleSeconds) {
+    let start = DispatchTime.now()
+    let graceDeadline = start.advanced(by: .milliseconds(presentGraceMilliseconds))
+
+    func elapsedMs() -> Double {
+      Double(DispatchTime.now().uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000
+    }
+
+    // Poll each runloop turn. Two exits:
+    //   • a presented VC exists AND is laid out (non-empty bounds) → a sheet/cover is up → capture now.
+    //   • the grace window elapses with no presentation → this preview has no sheet → capture now.
+    // So a `.sheet(isPresented: true)` is photographed a few frames after its present commits (fast),
+    // and a plain screen preview waits only the short grace, never a fixed long sleep.
+    func attemptCapture() {
+      let presented = host.presentedViewController
+      let presentationSettled = presented.map { !$0.view.bounds.isEmpty } ?? false
+      let graceElapsed = DispatchTime.now() >= graceDeadline
+
+      guard presentationSettled || graceElapsed else {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(pollStepMilliseconds)) {
+          attemptCapture()
+        }
+        return
+      }
+
       window.layoutIfNeeded()
       CATransaction.flush()
+
+      NSLog("WindowCaptureRendering: captured after %.0f ms (sheet=%@)",
+            elapsedMs(), presentationSettled ? "yes" : "none")
 
       let renderer = UIGraphicsImageRenderer(bounds: window.bounds)
       let image = renderer.image { _ in
@@ -76,6 +108,9 @@ enum WindowCaptureRendering {
         colorScheme: nil,
         appStoreSnapshot: nil))
     }
+
+    // Kick off on the next runloop turn so SwiftUI has a chance to process `isPresented = true`.
+    DispatchQueue.main.async { attemptCapture() }
   }
 }
 #endif
