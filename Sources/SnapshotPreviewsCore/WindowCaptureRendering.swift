@@ -27,16 +27,18 @@ enum WindowCaptureRendering {
 
   /// How long to wait for an asynchronous presentation (sheet/cover) to APPEAR before concluding the
   /// preview has none and capturing immediately. We do NOT sleep this long for a sheet — once a
-  /// presentation is detected we capture on the next runloop turn (typically a few frames in). This
-  /// only bounds the no-presentation case (the common full-screen screen preview). Animations are
-  /// disabled, so SwiftUI commits `.sheet(isPresented: true)` within a couple of frames; the default
-  /// is comfortably above the observed latency. Override with EMERGE_PREVIEW_PRESENT_GRACE_MS.
+  /// presentation is detected we capture on the next runloop turn (measured ~1 frame in). This only
+  /// bounds the no-presentation case (the common full-screen screen preview), which pays exactly this
+  /// once. Animations are disabled, so SwiftUI commits `.sheet(isPresented: true)` within ~1 frame;
+  /// 100ms (~6 frames at 60Hz) is comfortably above that with margin, yet negligible per render.
+  /// Override with EMERGE_PREVIEW_PRESENT_GRACE_MS (e.g. raise it if a sheet with heavy async content
+  /// ever mounts slower than the grace and is missed).
   private static var presentGraceMilliseconds: Int {
     if let raw = ProcessInfo.processInfo.environment["EMERGE_PREVIEW_PRESENT_GRACE_MS"],
        let parsed = Int(raw), parsed >= 0 {
       return parsed
     }
-    return 250
+    return 100
   }
 
   /// Poll step. One step ≈ one display frame; animations are disabled so a sheet mounts within a
